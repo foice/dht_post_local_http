@@ -14,11 +14,15 @@
 
 #define measurement_interval_millis 600000
 #define light_duration_millis 0
+#define wifilimit 20 // seconds
 #define subnet 6 // cannot collide with subnet on which it connects via the AP
-#define human_name "Camper Bathroom ESP8266 Web Interface"
+#define human_name "ESP8266 Web Interface"
 String PARAM_INPUT_1 = "input1";
 unsigned long update_frequency=measurement_interval_millis;
 unsigned long flash_duration=light_duration_millis;
+boolean globally_ignore_ntp = true;
+
+
 
 // ################ Http Server ################
 ESP8266WebServer server(80);    // Create a webserver object that listens for HTTP request on port 80
@@ -58,7 +62,7 @@ IPAddress DNS_IP( 8, 8, 8, 8 );
 
 IPAddress timeServerIP;        // The time.nist.gov NTP server's IP address
 //const char* ntpServerName = "192.168.114.1";   
-const char* ntpServerName = "time.nist.gov"; //"pool.ntp.org"; // "185.19.184.35"; 
+const char* ntpServerName = "132.163.96.4" ; //"time.nist.gov"; //"pool.ntp.org"; // "185.19.184.35"; 
 //const char* ntpServerName = "185.19.184.35";     //"it.pool.ntp.org"; 
 //const char* ntpServerName = "162.159.200.1";   //"pool.ntp.org"; //  162.159.200.1 
 
@@ -81,6 +85,7 @@ char* make_APSSID(int _subnet){
 //sprintf(apssid,"%s %i",basenameSSID,subnet);
 //char[] apssid="DAQnet-4";  // I will broadcast the ssid name of the network
 char* apssid = make_APSSID(subnet);
+
                                                 // if WiFi.mode(WIFI_AP_STA); and WiFi.softAP
 
                                                 
@@ -138,6 +143,10 @@ void startWiFi() {
     while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
       delay(1000);
       Serial.print(++i); Serial.print(' ');
+      if (i>20) {
+        Serial.println('Could not connect for 20 seconds; going without internet');
+        break;
+      }
     }
     
     Serial.println('\n');
@@ -567,17 +576,18 @@ void setup() {
 
   startUDP();                  // Start listening for UDP messages to port 123
 
-  Serial.print("Trying to get the IP address of the NTP server server IP:\t");
-  IPAddress DNS_IP( 8, 8, 8, 8 );
-  espconn_dns_setserver(0, DNS_IP);//to set the primary DNS to 8.8.8.8 
-  Serial.print("Manually set DNS: ");
-  WiFi.dnsIP(0).printTo(Serial); //to read the primary DNS
-  WiFi.hostByName(ntpServerName, timeServerIP); // Get the IP address of the NTP server
-  Serial.print("Time server IP:\t");
-  Serial.println(timeServerIP);
-
-  sendNTPpacket(timeServerIP);
-  delay(500);
+  //Serial.print("Trying to get the IP address of the NTP server server IP:\t");
+  //IPAddress DNS_IP( 8, 8, 8, 8 );
+  //espconn_dns_setserver(0, DNS_IP);//to set the primary DNS to 8.8.8.8 
+  //Serial.print("Manually set DNS: ");
+  //WiFi.dnsIP(0).printTo(Serial); //to read the primary DNS
+  //WiFi.hostByName(ntpServerName, timeServerIP); // Get the IP address of the NTP server
+  //Serial.print("Time server IP:\t");
+  //Serial.println(timeServerIP);
+   if (!globally_ignore_ntp) {
+    sendNTPpacket(timeServerIP);
+   }
+ delay(500);
 }
 
 
@@ -617,14 +627,18 @@ void loop() {
   unsigned long LED_flash_duration = getDuration(); 
 
   unsigned long currentMillis = millis();
-  boolean ignore_ntp = false; // ### IF NTP is not available it can be skipped altogether 
+  boolean ignore_ntp = globally_ignore_ntp; // ### IF NTP is not available it can be skipped altogether 
 
   if (currentMillis - prevNTP > intervalNTP) { // Request the time from the time server every hour
     Serial.print(intervalNTP);
     Serial.print("  elapsed. Sending NTP packet at t=");
     Serial.println(currentMillis);
     prevNTP = currentMillis;
-    sendNTPpacket(timeServerIP);
+    if (!globally_ignore_ntp && !ignore_ntp ) {
+      sendNTPpacket(timeServerIP);
+    } else {
+      Serial.println("...Skipped");
+    }
   }
 
   uint32_t time = getTime();                   // Check if the time server has responded, if so, get the UNIX time
@@ -686,9 +700,13 @@ void loop() {
     }
   } else {    
     // If we didn't receive an NTP response yet, send another request
-    Serial.println("We didn't receive an NTP response yet, sending another request");
-    sendNTPpacket(timeServerIP);
-    delay(1500);
+    if (!globally_ignore_ntp && !ignore_ntp ) {
+      Serial.println("We didn't receive an NTP response yet, sending another request");
+      sendNTPpacket(timeServerIP);
+      delay(1500);
+    } else {
+      Serial.println("...Skipped");
+    }
   }
 
   server.handleClient();                      // run the server
