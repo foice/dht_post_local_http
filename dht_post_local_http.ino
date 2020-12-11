@@ -15,9 +15,13 @@
 #define measurement_interval_millis 600000
 #define light_duration_millis 0
 #define wifilimit 20 // seconds
-#define subnet 6     // cannot collide with subnet on which it connects via the AP
+#define subnet 7     // cannot collide with subnet on which it connects via the AP
 #define human_name "ESP8266 Web Interface"
-String PARAM_INPUT_1 = "input1";
+
+//String observable = "Temperature";
+String observable = "Soil";
+
+String PARAM_INPUT_1 = "input1"; // the value that I control from the web interface
 unsigned long update_frequency = measurement_interval_millis;
 unsigned long flash_duration = light_duration_millis;
 boolean globally_ignore_ntp = true;
@@ -70,7 +74,7 @@ byte packetBuffer[NTP_PACKET_SIZE]; // A buffer to hold incoming and outgoing pa
 char *make_APSSID(int _subnet)
 {
   char apssid[24];
-  char basenameSSID[9] = "DAQnet";
+  char basenameSSID[9] = "DAQnet2";
   sprintf(apssid, "%s %i", basenameSSID, _subnet);
   return apssid;
 }
@@ -594,6 +598,32 @@ String readDHTstring()
   return temp_hum;
 }
 
+String readSoil() {
+  float moisture_percentage;
+
+  float analogValue = analogRead(A0); // read the analog signal
+  float maxvalue = 1024.0;
+
+  moisture_percentage = ( 100.00 - ( (analogValue/maxvalue) * 100.00 ) );
+
+  float air=946;
+  float water=640;
+
+  Serial.print("Soil Moisture(base-"); Serial.print(int(maxvalue)); Serial.print(" in Percentage) = ");
+  Serial.print(moisture_percentage);
+  Serial.println("%");
+  
+  Serial.print("{\"water\":"); Serial.print(water);Serial.print("}");
+  Serial.print("{\"air\":"); Serial.print(air);Serial.print("}");
+  Serial.print("{\"soil\":"); Serial.print(analogValue);Serial.print("}");Serial.println("");
+  
+  Serial.print("Soil Moisture(base-"); Serial.print(int(water));Serial.print(";");Serial.print(int(maxvalue)); Serial.print(" in Percentage) = ");
+  Serial.print(100*(analogValue - maxvalue)/(water - maxvalue ));Serial.println("%");
+
+   return String(analogValue);
+}
+
+
 /*__________________________________________________________SETUP__________________________________________________________*/
 
 void setup()
@@ -721,7 +751,9 @@ void loop()
 
   if (timeUNIX != 0 || ignore_ntp)
   {
-    // carry out the measurement
+    /// *************************
+    /// carry out the measurement
+    /// *************************
     if (currentMillis - prevTemp > intervalTemp)
     { // Every intervalTemp, request the temperature
       //      tempSensors.requestTemperatures(); // Request the temperature from the sensor (it takes some time to read it)
@@ -732,30 +764,47 @@ void loop()
       {
         led_on(LED_flash_duration);
       }
-      Serial.println("Temperature requested");
+
+      //String observable = "Temperature";
+
+      //void carry_out_measurement(String observable) {
+      //}
+      
+      Serial.println(observable+" requested");
       //    }
       //if (currentMillis - prevTemp > DS_delay && tmpRequested) { // 750 ms after requesting the temperature
       uint32_t actualTime = timeUNIX + (currentMillis - lastNTPResponse) / 1000;
       // The actual time is the last NTP time plus the time that has elapsed since the last NTP response
       //tmpRequested = false;
 
-      // ******* Get the temperature from the sensor *******
-      String temp = readDHTstring(); // Get the temperature from the sensor
-      // *****************************************************************
+      String obs;
+      if (observable=="Temperature") {
+          // ******* Get the temperature from the sensor *******
+          String temp = readDHTstring(); // Get the temperature from the sensor
+          obs = temp;
+          // *****************************************************************
+      }
+
+      if (observable=="Soil") {
+        String soil = readSoil();
+        obs = soil;
+      }
 
       Serial.printf("Appending temperature to file: %lu,", actualTime);
-      Serial.println(temp);
+      Serial.println(obs);
       File tempLog = SPIFFS.open("/temp.csv", "a"); // Write the time and the temperature to the csv file
       tempLog.print(actualTime);
       tempLog.print(',');
-      tempLog.println(temp);
+      tempLog.println(obs);
       tempLog.close();
       tempLog = SPIFFS.open("/last_temp.csv", "w+"); // Write the time and the temperature to the csv file
       tempLog.print(actualTime);
       tempLog.print(',');
-      tempLog.println(temp);
+      tempLog.println(obs);
       tempLog.close();
       listAllFilesNameSize();
+
+      
     }
   }
   else
