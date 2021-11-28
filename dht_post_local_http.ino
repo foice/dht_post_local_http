@@ -7,24 +7,38 @@
 #include <FS.h>
 //#include <Dns.h>
 #include "espconn.h"
+#include <MQTTClient.h>  // https://cables.gl/docs/3_communication/mqtt_arduino/mqtt_arduino
+#include <PubSubClient.h> // also MQTT https://iotdesignpro.com/projects/how-to-connect-esp8266-with-mqtt
 
-#include "credentials.h";
+#include "credentials.h"; // WLAN / MQTT user credentials
 
 #define ONE_HOUR 3600000UL
 
 #define measurement_interval_millis 600000
 #define light_duration_millis 0
 #define wifilimit 20 // seconds
-#define subnet 7     // cannot collide with subnet on which it connects via the AP
-#define human_name "ESP8266 Web Interface"
+#define subnet 4     // cannot collide with subnet on which it connects via the AP
+#define human_name "Guestroom ESP8266 Web Interface"
+//#define subnet 2     // cannot collide with subnet on which it connects via the AP
+//#define human_name "Livingroom ESP8266 Web Interface"
+//#define subnet 6     // cannot collide with subnet on which it connects via the AP
+//#define human_name "Bedroom ESP8266 Web Interface"
 
-//String observable = "Temperature";
-String observable = "Soil";
+//#define subnet 11     // cannot collide with subnet on which it connects via the AP
+//#define human_name "Bonsai ESP8266 Web Interface"
+
+String observable = "Temperature";
+//String observable = "Soil";
 
 String PARAM_INPUT_1 = "input1"; // the value that I control from the web interface
 unsigned long update_frequency = measurement_interval_millis;
 unsigned long flash_duration = light_duration_millis;
-boolean globally_ignore_ntp = true;
+boolean globally_ignore_ntp = false;
+
+
+// ################ MQTT setup ################
+MQTTClient client;
+
 
 // ################ Http Server ################
 ESP8266WebServer server(80); // Create a webserver object that listens for HTTP request on port 80
@@ -63,10 +77,11 @@ IPAddress DNS_IP(8, 8, 8, 8);
 
 IPAddress timeServerIP; // The time.nist.gov NTP server's IP address
 //const char* ntpServerName = "192.168.114.1";
-const char *ntpServerName = "132.163.96.4"; //"time.nist.gov"; //"pool.ntp.org"; // "185.19.184.35";
+//const char *ntpServerName = "132.163.96.4"; //"time.nist.gov"; //"pool.ntp.org"; // "185.19.184.35";
+//const char *ntpServerName = "time.nist.gov";
 //const char* ntpServerName = "185.19.184.35";     //"it.pool.ntp.org";
 //const char* ntpServerName = "162.159.200.1";   //"pool.ntp.org"; //  162.159.200.1
-
+const char* ntpServerName = "pool.ntp.org";
 const int NTP_PACKET_SIZE = 48;     // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[NTP_PACKET_SIZE]; // A buffer to hold incoming and outgoing packets
 // *************************************
@@ -126,6 +141,8 @@ void startWiFi()
     connect_as_client = true;
   }
 
+
+  // ######## REGULAR CLIENT CONNECTION TO AP #########
   if (connect_as_client)
   {
     WiFiClient clientSTA; // client mod for station mod
@@ -172,6 +189,20 @@ void startWiFi()
 
     Serial.println("...........................");
 
+
+
+    // void startMQTT() {
+    // setup MQTT
+    Serial.print("Connecting to MQTT-server "); Serial.println(mqtt_server);
+    client.begin(mqtt_server, clientSTA);
+    while (!client.connect(device_name, mqtt_username, mqtt_password)) {
+        Serial.print(".");
+        delay(1000);
+    }
+    //}
+
+    // #######  NEW AP ??? #######
+
     //IPAddress dns1(8, 8, 8, 8);  //Google dns
     //IPAddress dns2(8, 8, 4, 4);  //Google dns
     // print your WiFi shield's IP address:
@@ -206,6 +237,9 @@ void startWiFi()
     }
   }
 }
+
+
+
 
 void startUDP()
 {
@@ -615,7 +649,7 @@ String readSoil() {
   
   Serial.print("{\"water\":"); Serial.print(water);Serial.print("}");
   Serial.print("{\"air\":"); Serial.print(air);Serial.print("}");
-  Serial.print("{\"soil\":"); Serial.print(analogValue);Serial.print("}");Serial.println("");
+  Serial.print("{\"this soil\":"); Serial.print(analogValue);Serial.print("}");Serial.println("");
   
   Serial.print("Soil Moisture(base-"); Serial.print(int(water));Serial.print(";");Serial.print(int(maxvalue)); Serial.print(" in Percentage) = ");
   Serial.print(100*(analogValue - maxvalue)/(water - maxvalue ));Serial.println("%");
@@ -637,8 +671,9 @@ void setup()
   Serial.begin(115200); // Start the Serial communication to send messages to the computer
   delay(10);
   Serial.println('\n');
-  //WiFi.hostByName(ntpServerName, timeServerIP); // Get the IP address of the NTP server
-
+  if (  !globally_ignore_ntp  ) {
+    WiFi.hostByName(ntpServerName, timeServerIP); // Get the IP address of the NTP server
+  }
   startWiFi(); // Start a Wi-Fi access point, and try to connect to some given access points. Then wait for either an AP or STA connection
 
   startOTA(); // Start the OTA service
@@ -648,6 +683,8 @@ void setup()
   startMDNS(); // Start the mDNS responder
 
   startServer(); // Start a HTTP server with a file read handler and an upload handler
+
+  //startMQTT();
 
   startUDP(); // Start listening for UDP messages to port 123
 
@@ -698,6 +735,8 @@ void led_on(int millisec)
 
 void loop()
 {
+
+  int refused_ntp=0;
   digitalWrite(LED_BUILTIN, HIGH); // Turn the LED off by making the voltage HIGH
 
   unsigned long intervalTemp = getInterval();
@@ -718,11 +757,13 @@ void loop()
     }
     else
     {
-      Serial.println("...Skipped");
+      Serial.println("...NTP refesh skipped");
     }
   }
 
   uint32_t time = getTime(); // Check if the time server has responded, if so, get the UNIX time
+
+  
   if (time)
   {
 
@@ -812,9 +853,14 @@ void loop()
     // If we didn't receive an NTP response yet, send another request
     if (!globally_ignore_ntp && !ignore_ntp)
     {
-      Serial.println("We didn't receive an NTP response yet, sending another request");
+      
+      Serial.print("We didn't receive an NTP response yet, sending a new request. This is n.");
+      Serial.print(refused_ntp);
+      Serial.print(" to ");
+      Serial.println(timeServerIP);
       sendNTPpacket(timeServerIP);
       delay(1500);
+      refused_ntp++;
     }
     else
     {
